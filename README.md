@@ -14,3 +14,8 @@ conda activate humanoid-mimic-pose
 ```
 pip install -r requirements.txt
 ```
+
+###
+```
+pip install -e .
+```
