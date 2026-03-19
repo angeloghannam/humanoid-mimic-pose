@@ -1,2 +1,8 @@
 autopep8
 mujoco
+imageio
+gymnasium
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+stable-baselines3
+
