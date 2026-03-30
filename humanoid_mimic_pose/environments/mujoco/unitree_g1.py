@@ -41,5 +41,4 @@ class UnitreeG1(MujocoRobotEnv):
 
     def is_terminated(self) -> bool:
         height = self.data.body("torso_link").xpos[2]
-        print(f"height: {height}")
         return height < MIN_TERMINATION_HEIGHT

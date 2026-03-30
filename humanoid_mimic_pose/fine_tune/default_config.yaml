@@ -1,0 +1,16 @@
+env: "UnitreeG1-v0"
+
+n_trials: 25
+n_startup_trials: 5
+n_evaluations_per_trial: 4
+n_timesteps_per_trial: 100000
+n_eval_episodes: 10
+n_parallel_envs: 5
+
+save_study: true
+
+ppo_config:
+  gamma_range: [0.97, 0.999]
+  n_steps_pow_range: [5, 10]
+  lr_range: [0.00003, 0.003]
+  activation_func: ["tanh", "relu"]
