@@ -9,6 +9,9 @@ DEFAULT_N_ACTIONS = 29
 DEFAULT_N_SUBSTEPS = 5
 MIN_TERMINATION_HEIGHT = 0.5    # meters
 
+SUPPORTED_TRAINING_MODES = ['stand', 'walk']
+DEFAULT_TRAINING_MODE = 'stand'
+
 
 class UnitreeG1(MujocoRobotEnv):
 
@@ -16,6 +19,7 @@ class UnitreeG1(MujocoRobotEnv):
                  model_path: str = DEFAULT_MODEL_PATH,
                  n_actions: int = DEFAULT_N_ACTIONS,
                  n_substeps: int = DEFAULT_N_SUBSTEPS,
+                 training_mode: str = DEFAULT_TRAINING_MODE,
                  **kwargs):
         """Unitree G1 Mujoco/Gymnasium environment 
 
@@ -31,6 +35,12 @@ class UnitreeG1(MujocoRobotEnv):
             n_actions=n_actions,
             n_substeps=n_substeps,
             **kwargs)
+
+        if training_mode not in SUPPORTED_TRAINING_MODES:
+            raise ValueError(
+                f"Training mode {training_mode} not supported. \n Supported modes are {SUPPORTED_TRAINING_MODES}")
+
+        self.training_mode = training_mode
 
     def get_null_action(self) -> NDArray:
         return zeros(self.model.nu)
