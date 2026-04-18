@@ -1,6 +1,9 @@
-from numpy import zeros
+import math
+import numpy as np
 from numpy.typing import NDArray
 from importlib.resources import files
+
+from humanoid_mimic_pose.utils.utils import angle_between
 
 from humanoid_mimic_pose.environments.mujoco.mujoco_base_env import MujocoRobotEnv
 
@@ -12,6 +15,8 @@ MIN_TERMINATION_HEIGHT = 0.5    # meters
 SUPPORTED_TRAINING_MODES = ['stand', 'walk']
 DEFAULT_TRAINING_MODE = 'stand'
 
+TARGET_VELOCITY = 1.0  # m/s
+
 
 class UnitreeG1(MujocoRobotEnv):
 
@@ -21,7 +26,7 @@ class UnitreeG1(MujocoRobotEnv):
                  n_substeps: int = DEFAULT_N_SUBSTEPS,
                  training_mode: str = DEFAULT_TRAINING_MODE,
                  **kwargs):
-        """Unitree G1 Mujoco/Gymnasium environment 
+        """Unitree G1 Mujoco/Gymnasium environment
 
         Args:
             model_path (str, optional): Path to mjcf mujoco model. Defaults to DEFAULT_MODEL_PATH.
@@ -43,12 +48,65 @@ class UnitreeG1(MujocoRobotEnv):
         self.training_mode = training_mode
 
     def get_null_action(self) -> NDArray:
-        return zeros(self.model.nu)
+        return np.zeros(self.model.nu)
 
-    def compute_reward(self) -> float:
+    def compute_robot_reward(self) -> float:
+        match self.training_mode:
+            case 'stand':
+                goal_reward = self.stand_reward()
+            case 'walk':
+                goal_reward = self.walk_reward()
+            case _:
+                raise ValueError(
+                    f"Training mode {self.training_mode} not supported. \n Supported modes are {SUPPORTED_TRAINING_MODES}")
+
+        optimizing_reward = self.optimizing_reward()
+
+        return goal_reward + optimizing_reward
+
+    def stand_reward(self) -> float:
+        # 6D velocity: [angular (wx, wy, wz), linear (vx, vy, vz)]
+        cvel = self.data.body("torso_link").cvel
+
+        torso_angular_velocity = np.linalg.norm(cvel[:3])
+        torso_linear_velocity = np.linalg.norm(cvel[3:])
+
+        linear_reward = 1 + math.tanh(-torso_linear_velocity)
+        angular_reward = 1 + math.tanh(-torso_angular_velocity)
+
+        orientation_reward = self._upright_reward()
+
+        return (linear_reward + angular_reward + orientation_reward) / 3
+
+    def walk_reward(self) -> float:
+        torso_x_vel = self.data.body("torso_link").cvel[3]
+        velocity_reward = math.tanh(torso_x_vel)
+        orientation_reward = self._upright_reward()
+
+        return (velocity_reward + orientation_reward) / 2
+
+    def optimizing_reward(self) -> float:
+        return self._action_magnitude_reward() + self._healthy_reward()
+
+    def _action_magnitude_reward(self) -> float:
+        return math.tanh(-np.linalg.norm(self.data.ctrl))
+
+    def _healthy_reward(self) -> float:
         height = self.data.body("torso_link").xpos[2]
-        return height
+        height_margin = height - MIN_TERMINATION_HEIGHT
+        height_reward = math.tanh(5.0 * height_margin)
+
+        if self.is_terminated():
+            return -1.0
+
+        return height_reward
+
+    def _upright_reward(self) -> float:
+        torso_trsf = self.data.body("torso_link").xmat.reshape(3, 3)
+        torso_z = torso_trsf[:, 2]
+        world_z = np.array([0, 0, 1])
+        return 1 + math.tanh(-angle_between(torso_z, world_z))
 
     def is_terminated(self) -> bool:
         height = self.data.body("torso_link").xpos[2]
-        return height < MIN_TERMINATION_HEIGHT
+        return bool(height < MIN_TERMINATION_HEIGHT)

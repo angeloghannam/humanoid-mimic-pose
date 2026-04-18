@@ -79,7 +79,7 @@ class BaseRobotEnv(Env):
         if self.render_mode == "human":
             self.render()
 
-        reward = self.compute_reward()
+        reward = self.compute_robot_reward()
 
         self._step_count += 1
 
@@ -119,7 +119,7 @@ class BaseRobotEnv(Env):
     def _get_obs(self) -> NDArray:
         raise NotImplementedError
 
-    def compute_reward(self) -> float:
+    def compute_robot_reward(self) -> float:
         raise NotImplementedError
 
     def is_terminated(self):
