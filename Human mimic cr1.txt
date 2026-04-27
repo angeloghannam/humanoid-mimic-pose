@@ -1,0 +1,4 @@
+Human mimic :
+- Partie inférence, extraction du squelette sur une vidéo : Guigui
+- Partie extraction du squelette du robot : Marco
+- Partie apprentissage des positions par le robot. : Angelo

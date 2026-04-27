@@ -1,7 +1,7 @@
 import mediapipe as mp
 import numpy as np
 
-class Pose2D:
+class Pose3D:
 
     def __init__(self):
 

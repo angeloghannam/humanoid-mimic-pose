@@ -1,28 +1,61 @@
 import mediapipe as mp
 import numpy as np
 
+from pathlib import Path
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+
+
 class Pose2D:
 
-    def __init__(self):
+    def __init__(self, model_path=None):
 
-        self.mp_pose = mp.solutions.pose
+        if model_path is None:
+            print(Path(__file__).parent)
+            model_path = Path(__file__).parent / "models" / "pose_landmarker_full.task"
 
-        self.pose = self.mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            enable_segmentation=False
+        model_path = str(model_path)
+
+        BaseOptions = python.BaseOptions
+        PoseLandmarker = vision.PoseLandmarker
+        PoseLandmarkerOptions = vision.PoseLandmarkerOptions
+        VisionRunningMode = vision.RunningMode
+
+        options = PoseLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=model_path),
+            running_mode=VisionRunningMode.IMAGE
         )
+
+        self.detector = PoseLandmarker.create_from_options(options)
 
     def infer(self, frame):
 
-        results = self.pose.process(frame)
+        mp_image = mp.Image(
+            image_format=mp.ImageFormat.SRGB,
+            data=frame
+        )
 
-        if not results.pose_landmarks:
+        result = self.detector.detect(mp_image)
+
+        if len(result.pose_landmarks) == 0:
             return None
 
-        keypoints = []
+        landmarks = result.pose_landmarks[0]
 
-        for lm in results.pose_landmarks.landmark:
-            keypoints.append([lm.x, lm.y])
+        keypoints = np.array([[lm.x, lm.y] for lm in landmarks])
 
-        return np.array(keypoints)
+        return keypoints
+    
+    def infer_result(self, frame):
+
+        mp_image = mp.Image(
+            image_format=mp.ImageFormat.SRGB,
+            data=frame
+        )
+
+        result = self.detector.detect(mp_image)
+
+        if len(result.pose_landmarks) == 0:
+            return None
+
+        return result
