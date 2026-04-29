@@ -1,4 +1,5 @@
 import math
+import logging
 import numpy as np
 from numpy.typing import NDArray
 from importlib.resources import files
@@ -10,12 +11,15 @@ from humanoid_mimic_pose.environments.mujoco.mujoco_base_env import MujocoRobotE
 DEFAULT_MODEL_PATH = str(files("humanoid_mimic_pose.assets") / "scene_mjx.xml")
 DEFAULT_N_ACTIONS = 29
 DEFAULT_N_SUBSTEPS = 5
-MIN_TERMINATION_HEIGHT = 0.5    # meters
 
 SUPPORTED_TRAINING_MODES = ['stand', 'walk']
 DEFAULT_TRAINING_MODE = 'stand'
 
 TARGET_VELOCITY = 1.0  # m/s
+
+### --- REWARD CONSTANTS --- ###
+IDEAL_TORSO_HEIGHT = 0.8    # meters
+MIN_TERMINATION_HEIGHT = 0.5    # meters
 
 
 class UnitreeG1(MujocoRobotEnv):
@@ -60,53 +64,131 @@ class UnitreeG1(MujocoRobotEnv):
                 raise ValueError(
                     f"Training mode {self.training_mode} not supported. \n Supported modes are {SUPPORTED_TRAINING_MODES}")
 
-        optimizing_reward = self.optimizing_reward()
+        healthy_reward = self._healthy_reward()
+        action_penalty = self._action_magnitude_penalty()
 
-        return goal_reward + optimizing_reward
+        return 0.6 * goal_reward + 0.2 * healthy_reward + 0.2 * action_penalty
 
     def stand_reward(self) -> float:
         # 6D velocity: [angular (wx, wy, wz), linear (vx, vy, vz)]
         cvel = self.data.body("torso_link").cvel
 
-        torso_angular_velocity = np.linalg.norm(cvel[:3])
-        torso_linear_velocity = np.linalg.norm(cvel[3:])
+        torso_angular_velocity = cvel[:3]
+        torso_linear_velocity = cvel[3:]
 
-        linear_reward = 1 + math.tanh(-torso_linear_velocity)
-        angular_reward = 1 + math.tanh(-torso_angular_velocity)
+        torso_angular_velocity_norm = np.linalg.norm(torso_angular_velocity)
+        torso_linear_velocity_norm = np.linalg.norm(torso_linear_velocity)
 
-        orientation_reward = self._upright_reward()
+        vel_penalty = - np.linalg.norm(torso_linear_velocity / torso_linear_velocity_norm)
+        ang_penalty = - np.linalg.norm(torso_angular_velocity / torso_angular_velocity_norm)
 
-        return (linear_reward + angular_reward + orientation_reward) / 3
+        upright = self._upright_reward()
+
+        contact_reward = self._foot_contact_reward()
+
+        # -1 <= stand_reward <= 1
+        return (vel_penalty + ang_penalty + upright + contact_reward) / 2.0
 
     def walk_reward(self) -> float:
         torso_x_vel = self.data.body("torso_link").cvel[3]
         velocity_reward = math.tanh(torso_x_vel)
         orientation_reward = self._upright_reward()
 
-        return (velocity_reward + orientation_reward) / 2
+        return (velocity_reward + orientation_reward) / 2.0
 
-    def optimizing_reward(self) -> float:
-        return self._action_magnitude_reward() + self._healthy_reward()
-
-    def _action_magnitude_reward(self) -> float:
-        return math.tanh(-np.linalg.norm(self.data.ctrl))
+    def _action_magnitude_penalty(self) -> float:
+        action = self.data.ctrl
+        action_magnitude = np.linalg.norm(action)
+        normalized_penalty = - np.linalg.norm(action / action_magnitude)
+        return normalized_penalty
 
     def _healthy_reward(self) -> float:
         height = self.data.body("torso_link").xpos[2]
         height_margin = height - MIN_TERMINATION_HEIGHT
-        height_reward = math.tanh(5.0 * height_margin)
-
-        if self.is_terminated():
-            return -1.0
-
-        return height_reward
+        ideal_height_margin = IDEAL_TORSO_HEIGHT - MIN_TERMINATION_HEIGHT
+        height_reward = height_margin / ideal_height_margin
+        return np.clip(height_reward, 0, 1)
 
     def _upright_reward(self) -> float:
-        torso_trsf = self.data.body("torso_link").xmat.reshape(3, 3)
-        torso_z = torso_trsf[:, 2]
+        torso_z = self.__get_torso_orientation()
         world_z = np.array([0, 0, 1])
-        return 1 + math.tanh(-angle_between(torso_z, world_z))
+        upright_reward = math.cos(angle_between(torso_z, world_z))
+        return np.clip(upright_reward, 0, 1)
+
+    def _foot_contact_reward(self) -> float:
+        # IDs for floor and foot geoms
+        floor_id = self.model.geom("floor").id
+
+        left_geom_ids = [
+            self.model.geom("left_foot1_collision").id,
+            self.model.geom("left_foot2_collision").id,
+            self.model.geom("left_foot3_collision").id,
+        ]
+
+        right_geom_ids = [
+            self.model.geom("right_foot1_collision").id,
+            self.model.geom("right_foot2_collision").id,
+            self.model.geom("right_foot3_collision").id,
+        ]
+
+        # Track which geoms are in contact
+        left_contacts = set()
+        right_contacts = set()
+
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            g1, g2 = contact.geom1, contact.geom2
+
+            # Check left foot contacts
+            if (g1 in left_geom_ids and g2 == floor_id) or (g2 in left_geom_ids and g1 == floor_id):
+                left_contacts.add(g1 if g1 in left_geom_ids else g2)
+
+            # Check right foot contacts
+            if (g1 in right_geom_ids and g2 == floor_id) or (g2 in right_geom_ids and g1 == floor_id):
+                right_contacts.add(g1 if g1 in right_geom_ids else g2)
+
+        # Boolean: all geoms must be in contact
+        left_full_contact = len(left_contacts) == len(left_geom_ids)
+        right_full_contact = len(right_contacts) == len(right_geom_ids)
+
+        reward = 0.0
+        if left_full_contact:
+            reward += 0.5
+        if right_full_contact:
+            reward += 0.5
+
+        return reward
 
     def is_terminated(self) -> bool:
         height = self.data.body("torso_link").xpos[2]
         return bool(height < MIN_TERMINATION_HEIGHT)
+
+    def _get_obs(self) -> NDArray:
+
+        # --- Pelvis and Joints ---
+        qpos = self.data.qpos.copy()
+        qvel = self.data.qvel.copy()
+
+        qpos = qpos[2:]  # keep height + joints
+
+        # --- Torso ---
+        cvel = self.data.body("torso_link").cvel
+        torso_angular_velocity = cvel[:3]
+        torso_linear_velocity = cvel[3:]
+
+        torso_z = self.__get_torso_orientation()
+
+        obs = np.concatenate([
+            qpos,
+            qvel,
+            torso_z,
+            torso_angular_velocity,
+            torso_linear_velocity
+        ])
+
+        return obs.astype(np.float32)
+
+    def __get_torso_orientation(self) -> NDArray:
+        torso_trsf = self.data.body("torso_link").xmat.reshape(3, 3)
+        torso_z = torso_trsf[:, 2]
+        return torso_z
