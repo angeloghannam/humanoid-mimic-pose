@@ -22,7 +22,7 @@ if __name__ == "__main__":
     )
 
     # Train
-    model.learn(total_timesteps=5_000_000)
+    model.learn(total_timesteps=2_000_000)
 
     # Save model
     model.save("ppo_unitree_g1")
