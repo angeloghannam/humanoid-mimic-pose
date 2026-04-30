@@ -47,10 +47,10 @@ class BaseRobotEnv(Env):
 
         obs = self._get_obs()
 
-        self.action_space = spaces.Box(-1.0, 1.0,
-                                       shape=(n_actions,), dtype=np.float32)
-        self.observation_space = spaces.Box(-np.inf,
-                                            np.inf, shape=obs.shape, dtype=np.float32)
+        self.action_space = spaces.Box(-1.0, 1.0, shape=(n_actions,), dtype=np.float32)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float32)
+
+        self._last_rewards: Dict = {}
 
     # Env methods
     # ----------------------------
@@ -90,6 +90,8 @@ class BaseRobotEnv(Env):
 
         if truncated:
             info["TimeLimit.truncated"] = True
+
+        info["reward_components"] = self._last_reward_components
 
         return obs, reward, terminated, truncated, info
 

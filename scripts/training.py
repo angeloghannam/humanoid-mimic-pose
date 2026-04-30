@@ -3,6 +3,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 
 from humanoid_mimic_pose.environments.mujoco.unitree_g1 import UnitreeG1
+from humanoid_mimic_pose.training.callbacks import RewardLoggingCallback
 
 if __name__ == "__main__":
     env = gym.make("UnitreeG1-v0")
@@ -21,8 +22,10 @@ if __name__ == "__main__":
         tensorboard_log="./ppo_unitree_tensorboard/"
     )
 
+    callback = RewardLoggingCallback()
+
     # Train
-    model.learn(total_timesteps=2_000_000)
+    model.learn(total_timesteps=2_000_000, callback=callback)
 
     # Save model
     model.save("ppo_unitree_g1")

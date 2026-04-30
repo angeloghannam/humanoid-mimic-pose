@@ -1,7 +1,7 @@
 import math
-import logging
 import numpy as np
 from numpy.typing import NDArray
+from typing import Tuple, Dict
 from importlib.resources import files
 
 from humanoid_mimic_pose.utils.utils import angle_between
@@ -14,8 +14,6 @@ DEFAULT_N_SUBSTEPS = 5
 
 SUPPORTED_TRAINING_MODES = ['stand', 'walk']
 DEFAULT_TRAINING_MODE = 'stand'
-
-TARGET_VELOCITY = 1.0  # m/s
 
 ### --- REWARD CONSTANTS --- ###
 IDEAL_TORSO_HEIGHT = 0.8    # m
@@ -59,9 +57,7 @@ class UnitreeG1(MujocoRobotEnv):
     def compute_robot_reward(self) -> float:
         match self.training_mode:
             case 'stand':
-                goal_reward = self.stand_reward()
-            case 'walk':
-                goal_reward = self.walk_reward()
+                goal_reward, components = self.stand_reward()
             case _:
                 raise ValueError(
                     f"Training mode {self.training_mode} not supported. \n Supported modes are {SUPPORTED_TRAINING_MODES}")
@@ -69,9 +65,18 @@ class UnitreeG1(MujocoRobotEnv):
         healthy_reward = self._healthy_reward()
         action_penalty = self._action_magnitude_penalty()
 
-        return 0.7 * goal_reward + 0.2 * healthy_reward + 0.1 * action_penalty
+        total_reward = 0.7 * goal_reward + 0.2 * healthy_reward + 0.1 * action_penalty
 
-    def stand_reward(self) -> float:
+        self._last_reward_components = {
+            **components,
+            "healthy": healthy_reward,
+            "action_penalty": action_penalty,
+            "total": total_reward,
+        }
+
+        return total_reward
+
+    def stand_reward(self) -> Tuple[float, Dict[str, float]]:
         # 6D velocity: [angular (wx, wy, wz), linear (vx, vy, vz)]
         cvel = self.data.body("torso_link").cvel
 
@@ -88,19 +93,21 @@ class UnitreeG1(MujocoRobotEnv):
 
         contact_reward = self._foot_contact_reward()
 
-        return (
+        stand_reward = (
             0.3 * upright_reward +
             0.3 * contact_reward +
             0.2 * vel_penalty +
             0.2 * ang_penalty
         )
 
-    def walk_reward(self) -> float:
-        torso_x_vel = self.data.body("torso_link").cvel[3]
-        velocity_reward = math.tanh(torso_x_vel)
-        orientation_reward = self._upright_reward()
+        components = {
+            "upright": upright_reward,
+            "contact": contact_reward,
+            "vel_penalty": vel_penalty,
+            "ang_penalty": ang_penalty,
+        }
 
-        return (velocity_reward + orientation_reward) / 2.0
+        return stand_reward, components
 
     def _action_magnitude_penalty(self) -> float:
         action = self.data.ctrl
