@@ -18,8 +18,10 @@ DEFAULT_TRAINING_MODE = 'stand'
 TARGET_VELOCITY = 1.0  # m/s
 
 ### --- REWARD CONSTANTS --- ###
-IDEAL_TORSO_HEIGHT = 0.8    # meters
-MIN_TERMINATION_HEIGHT = 0.5    # meters
+IDEAL_TORSO_HEIGHT = 0.8    # m
+MIN_TERMINATION_HEIGHT = 0.5    # m
+MAX_TORSO_VEL = 2.5     # m/s
+MAX_TORSO_ANG_VEL = 10.0     # rad/s
 
 
 class UnitreeG1(MujocoRobotEnv):
@@ -67,7 +69,7 @@ class UnitreeG1(MujocoRobotEnv):
         healthy_reward = self._healthy_reward()
         action_penalty = self._action_magnitude_penalty()
 
-        return 0.6 * goal_reward + 0.2 * healthy_reward + 0.2 * action_penalty
+        return 0.7 * goal_reward + 0.2 * healthy_reward + 0.1 * action_penalty
 
     def stand_reward(self) -> float:
         # 6D velocity: [angular (wx, wy, wz), linear (vx, vy, vz)]
@@ -76,18 +78,22 @@ class UnitreeG1(MujocoRobotEnv):
         torso_angular_velocity = cvel[:3]
         torso_linear_velocity = cvel[3:]
 
+        vx, vy, _ = torso_linear_velocity
+        vel_penalty = -np.clip((abs(vx) + abs(vy)) / MAX_TORSO_VEL, 0.0, 1.0)
+
         torso_angular_velocity_norm = np.linalg.norm(torso_angular_velocity)
-        torso_linear_velocity_norm = np.linalg.norm(torso_linear_velocity)
+        ang_penalty = -np.clip(torso_angular_velocity_norm / MAX_TORSO_ANG_VEL, 0.0, 1.0)
 
-        vel_penalty = - np.linalg.norm(torso_linear_velocity / torso_linear_velocity_norm)
-        ang_penalty = - np.linalg.norm(torso_angular_velocity / torso_angular_velocity_norm)
-
-        upright = self._upright_reward()
+        upright_reward = self._upright_reward()
 
         contact_reward = self._foot_contact_reward()
 
-        # -1 <= stand_reward <= 1
-        return (vel_penalty + ang_penalty + upright + contact_reward) / 2.0
+        return (
+            0.3 * upright_reward +
+            0.3 * contact_reward +
+            0.2 * vel_penalty +
+            0.2 * ang_penalty
+        )
 
     def walk_reward(self) -> float:
         torso_x_vel = self.data.body("torso_link").cvel[3]
@@ -99,7 +105,9 @@ class UnitreeG1(MujocoRobotEnv):
     def _action_magnitude_penalty(self) -> float:
         action = self.data.ctrl
         action_magnitude = np.linalg.norm(action)
-        normalized_penalty = - np.linalg.norm(action / action_magnitude)
+        n_actuators = self.model.nu
+        max_action_magnitude = math.sqrt(n_actuators)
+        normalized_penalty = - action_magnitude / max_action_magnitude
         return normalized_penalty
 
     def _healthy_reward(self) -> float:
@@ -147,17 +155,12 @@ class UnitreeG1(MujocoRobotEnv):
             if (g1 in right_geom_ids and g2 == floor_id) or (g2 in right_geom_ids and g1 == floor_id):
                 right_contacts.add(g1 if g1 in right_geom_ids else g2)
 
-        # Boolean: all geoms must be in contact
-        left_full_contact = len(left_contacts) == len(left_geom_ids)
-        right_full_contact = len(right_contacts) == len(right_geom_ids)
+        left_ratio = len(left_contacts) / len(left_geom_ids)
+        right_ratio = len(right_contacts) / len(right_geom_ids)
 
-        reward = 0.0
-        if left_full_contact:
-            reward += 0.5
-        if right_full_contact:
-            reward += 0.5
+        contact_reward = 0.5 * left_ratio + 0.5 * right_ratio
 
-        return reward
+        return contact_reward
 
     def is_terminated(self) -> bool:
         height = self.data.body("torso_link").xpos[2]
