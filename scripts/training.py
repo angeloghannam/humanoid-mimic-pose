@@ -49,7 +49,7 @@ if __name__ == "__main__":
     callback = RewardLoggingCallback()
 
     # Train
-    model.learn(total_timesteps=6_000_000, callback=callback)
+    model.learn(total_timesteps=10_000_000, callback=callback)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 

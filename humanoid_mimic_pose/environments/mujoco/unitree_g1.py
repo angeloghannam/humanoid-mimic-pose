@@ -63,14 +63,16 @@ class UnitreeG1(MujocoRobotEnv):
                     f"Training mode {self.training_mode} not supported. \n Supported modes are {SUPPORTED_TRAINING_MODES}")
 
         healthy_reward = self._healthy_reward()
-        action_penalty = self._action_magnitude_penalty()
+        action_reward = self._action_smoothness_reward()
+        energy_reward = self._energy_reward()
 
-        total_reward = 0.7 * goal_reward + 0.2 * healthy_reward + 0.1 * action_penalty
+        total_reward = 0.6 * goal_reward + 0.3 * healthy_reward + 0.05 * action_reward + 0.05 * energy_reward
 
         self._last_reward_components = {
             **components,
             "healthy": healthy_reward,
-            "action_penalty": action_penalty,
+            "action_smoothness_reward": action_reward,
+            "energy_reward": energy_reward,
             "total": total_reward,
         }
 
@@ -84,51 +86,75 @@ class UnitreeG1(MujocoRobotEnv):
         torso_linear_velocity = cvel[3:]
 
         vx, vy, _ = torso_linear_velocity
-        vel_penalty = -np.clip((abs(vx) + abs(vy)) / MAX_TORSO_VEL, 0.0, 1.0)
+        lin_vel = vx**2 + vy**2
+        vel_normed = np.clip(lin_vel / MAX_TORSO_VEL, 0.0, 1.0)
+        vel_reward = math.exp(-5.0 * vel_normed)
 
         torso_angular_velocity_norm = np.linalg.norm(torso_angular_velocity)
-        ang_penalty = -np.clip(torso_angular_velocity_norm / MAX_TORSO_ANG_VEL, 0.0, 1.0)
+        ang_normed = np.clip(torso_angular_velocity_norm / MAX_TORSO_ANG_VEL, 0.0, 1.0)
+        ang_reward = math.exp(-5.0 * ang_normed)
 
         upright_reward = self._upright_reward()
 
         contact_reward = self._foot_contact_reward()
 
         stand_reward = (
-            0.3 * upright_reward +
-            0.3 * contact_reward +
-            0.2 * vel_penalty +
-            0.2 * ang_penalty
+            0.2 * upright_reward +
+            0.4 * contact_reward +
+            0.2 * vel_reward +
+            0.2 * ang_reward
         )
 
         components = {
             "upright": upright_reward,
             "contact": contact_reward,
-            "vel_penalty": vel_penalty,
-            "ang_penalty": ang_penalty,
+            "vel_reward": vel_reward,
+            "ang_reward": ang_reward,
         }
 
         return stand_reward, components
 
-    def _action_magnitude_penalty(self) -> float:
+    def _action_smoothness_reward(self) -> float:
         action = self.data.ctrl
-        action_magnitude = np.linalg.norm(action)
-        n_actuators = self.model.nu
-        max_action_magnitude = math.sqrt(n_actuators)
-        normalized_penalty = - action_magnitude / max_action_magnitude
-        return normalized_penalty
+        action_diff = action - self._last_action
+
+        ctrl_ranges = self.model.actuator_ctrlrange[:, 1] - self.model.actuator_ctrlrange[:, 0]
+
+        # Scale the difference by the range so 1.0 = jumping across the whole range
+        scaled_diff = action_diff / ctrl_ranges
+
+        diff_penalty = np.sum(np.square(scaled_diff)) / self.model.nu
+
+        # Use a high coefficient to punish high-frequency jitter
+        return math.exp(-50.0 * diff_penalty)
+
+    def _energy_reward(self) -> float:
+        actuator_forces = self.data.actuator_force
+
+        actuator_joint_ids = self.model.actuator_trnid[:, 0]  # Shape (29,)
+
+        force_limits = self.model.jnt_actfrcrange[actuator_joint_ids, 1]  # Shape (29,)
+
+        # Scale the difference by the range so 1.0 = jumping across the whole range
+        scaled_diff = actuator_forces / force_limits
+
+        diff_penalty = np.sum(np.square(scaled_diff)) / self.model.nu
+
+        # Use a high coefficient to punish high-frequency jitter
+        return math.exp(-0.5 * diff_penalty)
 
     def _healthy_reward(self) -> float:
         height = self.data.body("torso_link").xpos[2]
         height_margin = height - MIN_TERMINATION_HEIGHT
         ideal_height_margin = IDEAL_TORSO_HEIGHT - MIN_TERMINATION_HEIGHT
         height_reward = height_margin / ideal_height_margin
-        return np.clip(height_reward, 0, 1)
+        return np.clip(math.exp(-5.0 * (1.0 - height_reward)), 0, 1)
 
     def _upright_reward(self) -> float:
         torso_z = self.__get_torso_orientation()
         world_z = np.array([0, 0, 1])
         upright_reward = math.cos(angle_between(torso_z, world_z))
-        return np.clip(upright_reward, 0, 1)
+        return math.exp(-3.0 * (1.0 - upright_reward))
 
     def _foot_contact_reward(self) -> float:
         # IDs for floor and foot geoms
@@ -162,10 +188,9 @@ class UnitreeG1(MujocoRobotEnv):
             if (g1 in right_geom_ids and g2 == floor_id) or (g2 in right_geom_ids and g1 == floor_id):
                 right_contacts.add(g1 if g1 in right_geom_ids else g2)
 
-        left_ratio = len(left_contacts) / len(left_geom_ids)
-        right_ratio = len(right_contacts) / len(right_geom_ids)
-
-        contact_reward = 0.5 * left_ratio + 0.5 * right_ratio
+        left_stable = 1.0 if len(left_contacts) > 0 else 0.0
+        right_stable = 1.0 if len(right_contacts) > 0 else 0.0
+        contact_reward = 0.5 * (left_stable + right_stable)
 
         return contact_reward
 
@@ -179,7 +204,8 @@ class UnitreeG1(MujocoRobotEnv):
         qpos = self.data.qpos.copy()
         qvel = self.data.qvel.copy()
 
-        qpos = qpos[2:]  # keep height + joints
+        # Skip root pose (3 pos + 4 quat)
+        qpos = qpos[7:]
 
         # --- Torso ---
         cvel = self.data.body("torso_link").cvel
@@ -193,7 +219,8 @@ class UnitreeG1(MujocoRobotEnv):
             qvel,
             torso_z,
             torso_angular_velocity,
-            torso_linear_velocity
+            torso_linear_velocity,
+            self._last_action
         ])
 
         return obs.astype(np.float32)
