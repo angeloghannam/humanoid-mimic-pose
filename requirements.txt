@@ -7,3 +7,6 @@ torch
 stable-baselines3
 optuna
 dacite
+mediapipe == 0.10.33
+opencv-python
+nbstripout
