@@ -6,7 +6,7 @@ from numpy.typing import NDArray
 from gymnasium import spaces, Env
 
 DEFAULT_SIZE = 480
-MAX_EPISODE_STEPS = 1000
+MAX_EPISODE_STEPS = 100000
 
 
 class BaseRobotEnv(Env):

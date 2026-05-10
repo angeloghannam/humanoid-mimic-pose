@@ -66,7 +66,7 @@ class UnitreeG1(MujocoRobotEnv):
         action_reward = self._action_smoothness_reward()
         energy_reward = self._energy_reward()
 
-        total_reward = 0.6 * goal_reward + 0.3 * healthy_reward + 0.05 * action_reward + 0.05 * energy_reward
+        total_reward = 0.5 * goal_reward + 0.2 * healthy_reward + 0.1 * action_reward + 0.1 * energy_reward
 
         self._last_reward_components = {
             **components,
@@ -126,7 +126,7 @@ class UnitreeG1(MujocoRobotEnv):
         diff_penalty = np.sum(np.square(scaled_diff)) / self.model.nu
 
         # Use a high coefficient to punish high-frequency jitter
-        return math.exp(-50.0 * diff_penalty)
+        return math.exp(-5.0 * diff_penalty)
 
     def _energy_reward(self) -> float:
         actuator_forces = self.data.actuator_force
