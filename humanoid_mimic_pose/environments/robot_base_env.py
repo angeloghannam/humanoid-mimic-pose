@@ -6,7 +6,7 @@ from numpy.typing import NDArray
 from gymnasium import spaces, Env
 
 DEFAULT_SIZE = 480
-MAX_EPISODE_STEPS = 1000
+MAX_EPISODE_STEPS = 100000
 
 
 class BaseRobotEnv(Env):
@@ -37,20 +37,23 @@ class BaseRobotEnv(Env):
             width (int, optional): width of each rendered frame. Defaults to DEFAULT_SIZE.
             height (int, optional): height of each rendered frame. Defaults to DEFAULT_SIZE.
         """
+        super(BaseRobotEnv, self).__init__()
+
         self.width = width
         self.height = height
         self.render_mode = render_mode
         self.max_episode_steps = max_episode_steps
         self._step_count = 0
+        self._last_rewards: Dict = {}
 
         self._initialize_simulation()
 
+        self._last_action: NDArray = np.zeros(self.model.nu, dtype=np.float32)
+
         obs = self._get_obs()
 
-        self.action_space = spaces.Box(-1.0, 1.0,
-                                       shape=(n_actions,), dtype=np.float32)
-        self.observation_space = spaces.Box(-np.inf,
-                                            np.inf, shape=obs.shape, dtype=np.float32)
+        self.action_space = spaces.Box(-1.0, 1.0, shape=(n_actions,), dtype=np.float32)
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float32)
 
     # Env methods
     # ----------------------------
@@ -79,7 +82,7 @@ class BaseRobotEnv(Env):
         if self.render_mode == "human":
             self.render()
 
-        reward = self.compute_reward()
+        reward = self.compute_robot_reward()
 
         self._step_count += 1
 
@@ -91,6 +94,10 @@ class BaseRobotEnv(Env):
         if truncated:
             info["TimeLimit.truncated"] = True
 
+        info["reward_components"] = self._last_reward_components
+
+        self._last_action = np.copy(action)
+
         return obs, reward, terminated, truncated, info
 
     def reset(self, seed: Optional[int] = None, options: Optional[Dict] = None):
@@ -98,6 +105,8 @@ class BaseRobotEnv(Env):
 
         self._reset_sim()
         obs = self._get_obs()
+
+        self._last_action = np.zeros(self.model.nu, dtype=np.float32)
 
         if self.render_mode == "human":
             self.render()
@@ -119,7 +128,7 @@ class BaseRobotEnv(Env):
     def _get_obs(self) -> NDArray:
         raise NotImplementedError
 
-    def compute_reward(self) -> float:
+    def compute_robot_reward(self) -> float:
         raise NotImplementedError
 
     def is_terminated(self):

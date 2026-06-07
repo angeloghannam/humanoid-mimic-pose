@@ -106,9 +106,6 @@ class MujocoRobotEnv(BaseRobotEnv):
         self.data.ctrl[:] = action
         mujoco.mj_step(self.model, self.data, nstep=self.n_substeps)
 
-    def _get_obs(self) -> NDArray:
-        return np.concatenate([self.data.qpos, self.data.qvel]).astype(np.float32)
-
     def _default_qpos(self):
         return np.zeros(self.n_actions)
 

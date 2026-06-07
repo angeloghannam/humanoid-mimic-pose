@@ -1,13 +1,25 @@
-from numpy import zeros
+import math
+import numpy as np
 from numpy.typing import NDArray
+from typing import Tuple, Dict
 from importlib.resources import files
+
+from humanoid_mimic_pose.utils.utils import angle_between
 
 from humanoid_mimic_pose.environments.mujoco.mujoco_base_env import MujocoRobotEnv
 
 DEFAULT_MODEL_PATH = str(files("humanoid_mimic_pose.assets") / "scene_mjx.xml")
 DEFAULT_N_ACTIONS = 29
 DEFAULT_N_SUBSTEPS = 5
-MIN_TERMINATION_HEIGHT = 0.5    # meters
+
+SUPPORTED_TRAINING_MODES = ['stand', 'walk']
+DEFAULT_TRAINING_MODE = 'stand'
+
+### --- REWARD CONSTANTS --- ###
+IDEAL_TORSO_HEIGHT = 0.8    # m
+MIN_TERMINATION_HEIGHT = 0.5    # m
+MAX_TORSO_VEL = 2.5     # m/s
+MAX_TORSO_ANG_VEL = 10.0     # rad/s
 
 
 class UnitreeG1(MujocoRobotEnv):
@@ -16,8 +28,9 @@ class UnitreeG1(MujocoRobotEnv):
                  model_path: str = DEFAULT_MODEL_PATH,
                  n_actions: int = DEFAULT_N_ACTIONS,
                  n_substeps: int = DEFAULT_N_SUBSTEPS,
+                 training_mode: str = DEFAULT_TRAINING_MODE,
                  **kwargs):
-        """Unitree G1 Mujoco/Gymnasium environment 
+        """Unitree G1 Mujoco/Gymnasium environment
 
         Args:
             model_path (str, optional): Path to mjcf mujoco model. Defaults to DEFAULT_MODEL_PATH.
@@ -32,13 +45,187 @@ class UnitreeG1(MujocoRobotEnv):
             n_substeps=n_substeps,
             **kwargs)
 
-    def get_null_action(self) -> NDArray:
-        return zeros(self.model.nu)
+        if training_mode not in SUPPORTED_TRAINING_MODES:
+            raise ValueError(
+                f"Training mode {training_mode} not supported. \n Supported modes are {SUPPORTED_TRAINING_MODES}")
 
-    def compute_reward(self) -> float:
+        self.training_mode = training_mode
+
+    def get_null_action(self) -> NDArray:
+        return np.zeros(self.model.nu)
+
+    def compute_robot_reward(self) -> float:
+        match self.training_mode:
+            case 'stand':
+                goal_reward, components = self.stand_reward()
+            case _:
+                raise ValueError(
+                    f"Training mode {self.training_mode} not supported. \n Supported modes are {SUPPORTED_TRAINING_MODES}")
+
+        healthy_reward = self._healthy_reward()
+        action_reward = self._action_smoothness_reward()
+        energy_reward = self._energy_reward()
+
+        total_reward = 0.5 * goal_reward + 0.2 * healthy_reward + 0.1 * action_reward + 0.1 * energy_reward
+
+        self._last_reward_components = {
+            **components,
+            "healthy": healthy_reward,
+            "action_smoothness_reward": action_reward,
+            "energy_reward": energy_reward,
+            "total": total_reward,
+        }
+
+        return total_reward
+
+    def stand_reward(self) -> Tuple[float, Dict[str, float]]:
+        # 6D velocity: [angular (wx, wy, wz), linear (vx, vy, vz)]
+        cvel = self.data.body("torso_link").cvel
+
+        torso_angular_velocity = cvel[:3]
+        torso_linear_velocity = cvel[3:]
+
+        vx, vy, _ = torso_linear_velocity
+        lin_vel = vx**2 + vy**2
+        vel_normed = np.clip(lin_vel / MAX_TORSO_VEL, 0.0, 1.0)
+        vel_reward = math.exp(-5.0 * vel_normed)
+
+        torso_angular_velocity_norm = np.linalg.norm(torso_angular_velocity)
+        ang_normed = np.clip(torso_angular_velocity_norm / MAX_TORSO_ANG_VEL, 0.0, 1.0)
+        ang_reward = math.exp(-5.0 * ang_normed)
+
+        upright_reward = self._upright_reward()
+
+        contact_reward = self._foot_contact_reward()
+
+        stand_reward = (
+            0.2 * upright_reward +
+            0.4 * contact_reward +
+            0.2 * vel_reward +
+            0.2 * ang_reward
+        )
+
+        components = {
+            "upright": upright_reward,
+            "contact": contact_reward,
+            "vel_reward": vel_reward,
+            "ang_reward": ang_reward,
+        }
+
+        return stand_reward, components
+
+    def _action_smoothness_reward(self) -> float:
+        action = self.data.ctrl
+        action_diff = action - self._last_action
+
+        ctrl_ranges = self.model.actuator_ctrlrange[:, 1] - self.model.actuator_ctrlrange[:, 0]
+
+        # Scale the difference by the range so 1.0 = jumping across the whole range
+        scaled_diff = action_diff / ctrl_ranges
+
+        diff_penalty = np.sum(np.square(scaled_diff)) / self.model.nu
+
+        # Use a high coefficient to punish high-frequency jitter
+        return math.exp(-5.0 * diff_penalty)
+
+    def _energy_reward(self) -> float:
+        actuator_forces = self.data.actuator_force
+
+        actuator_joint_ids = self.model.actuator_trnid[:, 0]  # Shape (29,)
+
+        force_limits = self.model.jnt_actfrcrange[actuator_joint_ids, 1]  # Shape (29,)
+
+        # Scale the difference by the range so 1.0 = jumping across the whole range
+        scaled_diff = actuator_forces / force_limits
+
+        diff_penalty = np.sum(np.square(scaled_diff)) / self.model.nu
+
+        # Use a high coefficient to punish high-frequency jitter
+        return math.exp(-0.5 * diff_penalty)
+
+    def _healthy_reward(self) -> float:
         height = self.data.body("torso_link").xpos[2]
-        return height
+        height_margin = height - MIN_TERMINATION_HEIGHT
+        ideal_height_margin = IDEAL_TORSO_HEIGHT - MIN_TERMINATION_HEIGHT
+        height_reward = height_margin / ideal_height_margin
+        return np.clip(math.exp(-5.0 * (1.0 - height_reward)), 0, 1)
+
+    def _upright_reward(self) -> float:
+        torso_z = self.__get_torso_orientation()
+        world_z = np.array([0, 0, 1])
+        upright_reward = math.cos(angle_between(torso_z, world_z))
+        return math.exp(-3.0 * (1.0 - upright_reward))
+
+    def _foot_contact_reward(self) -> float:
+        # IDs for floor and foot geoms
+        floor_id = self.model.geom("floor").id
+
+        left_geom_ids = [
+            self.model.geom("left_foot1_collision").id,
+            self.model.geom("left_foot2_collision").id,
+            self.model.geom("left_foot3_collision").id,
+        ]
+
+        right_geom_ids = [
+            self.model.geom("right_foot1_collision").id,
+            self.model.geom("right_foot2_collision").id,
+            self.model.geom("right_foot3_collision").id,
+        ]
+
+        # Track which geoms are in contact
+        left_contacts = set()
+        right_contacts = set()
+
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            g1, g2 = contact.geom1, contact.geom2
+
+            # Check left foot contacts
+            if (g1 in left_geom_ids and g2 == floor_id) or (g2 in left_geom_ids and g1 == floor_id):
+                left_contacts.add(g1 if g1 in left_geom_ids else g2)
+
+            # Check right foot contacts
+            if (g1 in right_geom_ids and g2 == floor_id) or (g2 in right_geom_ids and g1 == floor_id):
+                right_contacts.add(g1 if g1 in right_geom_ids else g2)
+
+        left_stable = 1.0 if len(left_contacts) > 0 else 0.0
+        right_stable = 1.0 if len(right_contacts) > 0 else 0.0
+        contact_reward = 0.5 * (left_stable + right_stable)
+
+        return contact_reward
 
     def is_terminated(self) -> bool:
         height = self.data.body("torso_link").xpos[2]
-        return height < MIN_TERMINATION_HEIGHT
+        return bool(height < MIN_TERMINATION_HEIGHT)
+
+    def _get_obs(self) -> NDArray:
+
+        # --- Pelvis and Joints ---
+        qpos = self.data.qpos.copy()
+        qvel = self.data.qvel.copy()
+
+        # Skip root pose (3 pos + 4 quat)
+        qpos = qpos[7:]
+
+        # --- Torso ---
+        cvel = self.data.body("torso_link").cvel
+        torso_angular_velocity = cvel[:3]
+        torso_linear_velocity = cvel[3:]
+
+        torso_z = self.__get_torso_orientation()
+
+        obs = np.concatenate([
+            qpos,
+            qvel,
+            torso_z,
+            torso_angular_velocity,
+            torso_linear_velocity,
+            self._last_action
+        ])
+
+        return obs.astype(np.float32)
+
+    def __get_torso_orientation(self) -> NDArray:
+        torso_trsf = self.data.body("torso_link").xmat.reshape(3, 3)
+        torso_z = torso_trsf[:, 2]
+        return torso_z
