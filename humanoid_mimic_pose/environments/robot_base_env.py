@@ -1,4 +1,5 @@
 import numpy as np
+from collections import deque
 
 from typing import Optional, Dict, Tuple
 from numpy.typing import NDArray
@@ -7,6 +8,7 @@ from gymnasium import spaces, Env
 
 DEFAULT_SIZE = 480
 MAX_EPISODE_STEPS = 100000
+OBSERVATION_BUFFER_SIZE = 5
 
 
 class BaseRobotEnv(Env):
@@ -50,7 +52,9 @@ class BaseRobotEnv(Env):
 
         self._last_action: NDArray = np.zeros(self.model.nu, dtype=np.float32)
 
-        obs = self._get_obs()
+        self._last_observations = deque(maxlen=OBSERVATION_BUFFER_SIZE)
+        self._reset_observation_buffer()
+        obs = self._stack_observations()
 
         self.action_space = spaces.Box(-1.0, 1.0, shape=(n_actions,), dtype=np.float32)
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=obs.shape, dtype=np.float32)
@@ -104,7 +108,8 @@ class BaseRobotEnv(Env):
         super().reset(seed=seed)
 
         self._reset_sim()
-        obs = self._get_obs()
+        self._reset_observation_buffer()
+        obs = self._stack_observations()
 
         self._last_action = np.zeros(self.model.nu, dtype=np.float32)
 
@@ -125,8 +130,28 @@ class BaseRobotEnv(Env):
     def _mujoco_step(self, action: NDArray):
         raise NotImplementedError
 
-    def _get_obs(self) -> NDArray:
+    def _get_proprioceptive_obs(self) -> NDArray:
+        """Return the current single-frame observation (no history)."""
         raise NotImplementedError
+
+    # --- observation history helpers
+
+    def _reset_observation_buffer(self):
+        """Fill the history buffer with the current frame so the stacked
+        observation always has a fixed dimension."""
+        self._last_observations.clear()
+        base_obs = self._get_proprioceptive_obs()
+        for _ in range(OBSERVATION_BUFFER_SIZE):
+            self._last_observations.append(base_obs)
+
+    def _stack_observations(self) -> NDArray:
+        return np.concatenate(list(self._last_observations)).astype(np.float32)
+
+    def _get_obs(self) -> NDArray:
+        """Append the current frame to the history and return the stacked
+        observation."""
+        self._last_observations.append(self._get_proprioceptive_obs())
+        return self._stack_observations()
 
     def compute_robot_reward(self) -> float:
         raise NotImplementedError

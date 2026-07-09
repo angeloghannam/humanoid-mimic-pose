@@ -1,5 +1,6 @@
 import math
 import numpy as np
+from collections import deque
 from numpy.typing import NDArray
 from typing import Tuple, Dict
 from importlib.resources import files
@@ -198,7 +199,7 @@ class UnitreeG1(MujocoRobotEnv):
         height = self.data.body("torso_link").xpos[2]
         return bool(height < MIN_TERMINATION_HEIGHT)
 
-    def _get_obs(self) -> NDArray:
+    def _get_proprioceptive_obs(self) -> NDArray:
 
         # --- Pelvis and Joints ---
         qpos = self.data.qpos.copy()
@@ -212,15 +213,17 @@ class UnitreeG1(MujocoRobotEnv):
         torso_angular_velocity = cvel[:3]
         torso_linear_velocity = cvel[3:]
 
-        torso_z = self.__get_torso_orientation()
+        torso_pose = self.data.body("torso_link").xpos
+
+        torso_z_orientation = self.__get_torso_orientation()
 
         obs = np.concatenate([
             qpos,
             qvel,
-            torso_z,
+            torso_pose,
+            torso_z_orientation,
             torso_angular_velocity,
             torso_linear_velocity,
-            self._last_action
         ])
 
         return obs.astype(np.float32)
