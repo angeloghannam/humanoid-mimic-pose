@@ -5,3 +5,6 @@ dependencies:
   - python=3.10
   - numpy
   - pip
+  - pip:
+    - --extra-index-url https://download.pytorch.org/whl/cpu
+    - -e .

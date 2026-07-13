@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "humanoid-mimic-pose"
+version = "0.1.0"
+description = "Humanoid pose mimicry with MuJoCo / mjlab"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+include = ["humanoid_mimic_pose*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.xml", "*.obj", "*.stl", "*.png", "*.json", "*.yaml", "*.yml"]
