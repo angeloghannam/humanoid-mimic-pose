@@ -8,3 +8,4 @@ stable-baselines3
 optuna
 dacite
 tensorboard
+uv
