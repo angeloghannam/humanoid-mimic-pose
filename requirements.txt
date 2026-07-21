@@ -1,5 +1,6 @@
 autopep8
 mujoco
+mjlab
 imageio
 gymnasium
 torch
@@ -7,3 +8,4 @@ stable-baselines3
 optuna
 dacite
 tensorboard
+uv

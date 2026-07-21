@@ -9,6 +9,10 @@ description = "Humanoid pose mimicry with MuJoCo / mjlab"
 requires-python = ">=3.10"
 dynamic = ["dependencies"]
 
+[project.scripts]
+train = "humanoid_mimic_pose.environments.mjlab.cli:train"
+play = "humanoid_mimic_pose.environments.mjlab.cli:play"
+
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
 
