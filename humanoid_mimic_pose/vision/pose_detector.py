@@ -5,7 +5,7 @@ import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-from .skeleton import Skeleton
+from humanoid_mimic_pose.vision.skeleton import Skeleton
 
 
 class PoseDetector:
