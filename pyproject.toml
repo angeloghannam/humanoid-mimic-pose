@@ -20,4 +20,4 @@ dependencies = {file = ["requirements.txt"]}
 include = ["humanoid_mimic_pose*"]
 
 [tool.setuptools.package-data]
-"*" = ["*.xml", "*.obj", "*.stl", "*.png", "*.json", "*.yaml", "*.yml"]
+"*" = ["*.xml", "*.obj", "*.stl", "*.png", "*.json", "*.yaml", "*.yml", "*.task"]

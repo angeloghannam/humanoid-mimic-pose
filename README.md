@@ -6,11 +6,15 @@
 conda env create -f environment.yml
 conda activate humanoid-mimic-pose
 bash setup_uv_env.sh
+nbstripout --install
 ```
 
 `setup_uv_env.sh` installs the project and points `uv run` at the conda env
 (so it doesn't build a separate `.venv`). Re-activate the env afterwards to
 load the hook: `conda activate humanoid-mimic-pose`.
+
+`nbstripout --install` registers the git filter that strips notebook outputs
+on commit (the repo's `.gitattributes` applies it to `*.ipynb`).
 
 ## Train
 
